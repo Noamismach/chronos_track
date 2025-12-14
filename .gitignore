@@ -9,3 +9,16 @@ Thumbs.db
 # Project artifacts
 measurements.csv
 *.png
+# Build artifacts
+/target/
+
+# Data files (Personal info)
+measurements.csv
+
+# Generated Graphs
+/graphs/
+*.png
+
+# System files
+.DS_Store
+.vscode/

@@ -3,12 +3,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial import ConvexHull
 import sys
+import datetime
+import os
 
 print("Loading data...")
 
 try:
-    # טעינת הנתונים (הנחה: אין כותרות בקובץ שה-Rust מייצר כרגע)
-    # העמודות הן: Kernel Time (nanoseconds), Sender TS (ticks), IP
+    # טעינת הנתונים
     df = pd.read_csv('measurements.csv', names=['kernel_time', 'sender_ts', 'ip'], on_bad_lines='skip')
     
     # ניקוי המרות
@@ -20,40 +21,49 @@ try:
         print("Not enough data points! Run the sniffer longer.")
         sys.exit()
 
-    # נרמול הצירים (כדי שהגרף יתחיל מ-0,0)
-    # ציר X: השינוי בשעון השולח
+    # שליפת ה-IP לצורך שם הקובץ והכותרת
+    target_ip = df['ip'].iloc[0]
+
+    # נרמול הצירים
     x = df['sender_ts'] - df['sender_ts'].iloc[0]
-    # ציר Y: השינוי בשעון שלנו (בשניות)
     y = (df['kernel_time'] - df['kernel_time'].iloc[0]) / 1e9
 
     plt.figure(figsize=(12, 8))
 
-    # 1. ציור הנקודות הכחולות (כל הפאקטות שנקלטו)
+    # 1. ציור הנקודות
     plt.scatter(x, y, s=10, alpha=0.3, label='Raw Packets (Network Jitter)', color='blue')
 
-    # 2. חישוב Convex Hull (הקו האדום - האמת הפיזיקלית)
-    # אנחנו מחפשים את הגבול התחתון של הגרף
+    # 2. חישוב Convex Hull
     points = np.column_stack((x, y))
     try:
         hull = ConvexHull(points)
         for simplex in hull.simplices:
-            # מצייר קו אדום בין נקודות המעטפת
             plt.plot(points[simplex, 0], points[simplex, 1], 'r-', lw=2)
         print("Convex Hull calculated successfully.")
     except Exception as e:
         print(f"Could not calculate Convex Hull: {e}")
 
-    plt.title(f'Physical Device Fingerprint\nTarget IP: {df["ip"].iloc[0]}')
+    plt.title(f'Physical Device Fingerprint\nTarget IP: {target_ip}')
     plt.xlabel('Sender Clock Ticks')
     plt.ylabel('Receiver Time (Seconds)')
     plt.legend()
     plt.grid(True, alpha=0.3)
     
-    # שמירה לקובץ תמונה
-    output_file = 'fingerprint.png'
+    # --- החלק החדש: יצירת שם קובץ דינמי ---
+    # פורמט זמן: YYYYMMDD_HHMMSS (למשל: 20251214_153000)
+    current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # יצירת תיקיית פלט אם לא קיימת
+    output_dir = "graphs"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # שם הקובץ: graphs/fingerprint_192.168.1.168_20251214_153000.png
+    output_file = f'{output_dir}/fingerprint_{target_ip}_{current_time}.png'
+    
     plt.savefig(output_file)
     print(f"\nSUCCESS! Graph saved to: {output_file}")
-    print("Go to your Windows Desktop folder 'Clock Skew/chronos_track' and open the image.")
+    print(f"Go to your Windows folder 'Clock Skew/chronos_track/{output_dir}' to see it.")
 
 except FileNotFoundError:
     print("Error: 'measurements.csv' not found. Did you run the sniffer?")
