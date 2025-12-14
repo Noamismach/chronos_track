@@ -1,17 +1,22 @@
 mod analysis;
 mod config;
+mod injector;
 mod sniffer;
 
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter};
 use std::process;
+use std::thread;
 
 use analysis::{Point, calculate_skew, compute_lower_hull, slope_to_ppm};
 use config::Config;
+use std::net::{IpAddr, Ipv4Addr};
 
 const ANALYSIS_INTERVAL: u64 = 50;
 const NS_PER_SEC: f64 = 1_000_000_000.0;
+const SOURCE_PORT: u16 = 54_321;
+const TARGET_PORT: u16 = 80;
 
 fn main() {
     env_logger::init();
@@ -24,13 +29,28 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let cfg = Config::from_args();
-    let target_ip = cfg.target_ip;
+    let target_filter = cfg.target_ip;
+    let injection_target = resolve_target_v4(target_filter)?;
 
     log::info!(
         "Chronos-Track starting on interface {} (target={:?})",
         cfg.interface,
-        target_ip
+        target_filter
     );
+
+    let _rst_guard = RstGuard::install(SOURCE_PORT)?;
+
+    ctrlc::set_handler({
+        let port = SOURCE_PORT;
+        move || {
+            injector::cleanup_rst(port);
+            process::exit(0);
+        }
+    })?;
+
+    thread::spawn(move || {
+        injector::start_injection_loop(injection_target, TARGET_PORT, SOURCE_PORT);
+    });
 
     let file = File::create("measurements.csv")?;
     let mut csv_writer = csv::Writer::from_writer(BufWriter::new(file));
@@ -62,7 +82,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
         };
 
-        if let Some(filter_ip) = target_ip {
+        if let Some(filter_ip) = target_filter {
             if sample.src_ip != filter_ip {
                 continue;
             }
@@ -86,7 +106,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let hull = compute_lower_hull(points.clone());
             if let Some(slope) = calculate_skew(&hull) {
                 let ppm = slope_to_ppm(slope);
-                let display_ip = target_ip.unwrap_or(sample.src_ip);
+                let display_ip = target_filter.unwrap_or(sample.src_ip);
                 log::info!(
                     "[Packet #{packet_counter}] Target: {display_ip} | Points: {} | Estimated Skew: {:.2} ppm",
                     points.len(),
@@ -97,6 +117,43 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
 
             csv_writer.flush()?;
+        }
+    }
+}
+
+fn resolve_target_v4(target: Option<IpAddr>) -> Result<Ipv4Addr, Box<dyn Error>> {
+    match target {
+        Some(IpAddr::V4(ip)) => Ok(ip),
+        Some(IpAddr::V6(_)) => Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "IPv6 targets are not supported for active injection",
+        ))),
+        None => Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--target-ip is required when active injection is enabled",
+        ))),
+    }
+}
+
+struct RstGuard {
+    port: u16,
+    installed: bool,
+}
+
+impl RstGuard {
+    fn install(port: u16) -> io::Result<Self> {
+        injector::suppress_rst(port)?;
+        Ok(Self {
+            port,
+            installed: true,
+        })
+    }
+}
+
+impl Drop for RstGuard {
+    fn drop(&mut self) {
+        if self.installed {
+            injector::cleanup_rst(self.port);
         }
     }
 }
