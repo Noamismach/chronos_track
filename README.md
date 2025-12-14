@@ -1,4 +1,3 @@
-````markdown
 # 🕰️ Chronos-Track
 ### Active Remote Physical Device Fingerprinting Engine
 
@@ -27,6 +26,7 @@ Unlike traditional fingerprinting (Nmap/p0f) which looks at static software head
 | **Scientific Forensics** | Outputs precise **PPM (Parts Per Million)** skew and **Linearity ($R^2$)** metrics. |
 
 ### Why This Matters
+
 - **Hardware truthing:** Identifies physical endpoints hiding behind VPNs, Tor exits, or cloud NAT by measuring their crystal oscillator signature.
 - **Honeypot detection:** Differentiates real bare-metal from instrumented traps that recycle virtual timestamps.
 - **Attribution aid:** Pairs low-level timing data with higher-layer intel to improve clustering of adversary infrastructure.
@@ -47,6 +47,7 @@ Chronos-Track exploits the **TCP Timestamp Option (RFC 7323)**. By sending perio
 * **Virtual Machines:** Show erratic behavior, "steps" in time, or perfect synchronization (0 PPM) due to hypervisor scheduling.
 
 ### Data Products
+
 - `measurements.csv` – Raw tuples `(kernel_rx_time_ns, tcp_tsval, src_ip)` for offline research.
 - `graphs/*.png` – Optional Python/Matplotlib renders of convex-hull regression for reports.
 - **Exit Report** – On `Ctrl+C` the tool prints slope, ppm, R², and verdict for immediate triage.
