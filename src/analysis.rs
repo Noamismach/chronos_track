@@ -1,18 +1,149 @@
+use std::fmt;
+
+/// High-level measurement snapshot used by the skew estimator.
+#[derive(Debug, Clone)]
+pub struct Observation {
+    pub local_time: f64,
+    pub remote_ts: f64,
+}
+
+impl Observation {
+    pub fn new(local_time: f64, remote_ts: f64) -> Self {
+        Self {
+            local_time,
+            remote_ts,
+        }
+    }
+}
+
+/// Summary of a skew computation run.
+#[derive(Debug, Clone)]
+pub struct SkewReport {
+    pub slope: f64,
+    pub ppm: f64,
+    pub r_squared: f64,
+    pub verdict: Verdict,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Verdict {
+    StablePhysical,
+    LikelyPhysical,
+    Inconclusive,
+}
+
+impl Verdict {
+    fn classify(ppm: f64, r_squared: f64) -> Self {
+        if r_squared >= 0.97 && ppm.abs() >= 0.5 {
+            Verdict::StablePhysical
+        } else if r_squared >= 0.9 {
+            Verdict::LikelyPhysical
+        } else {
+            Verdict::Inconclusive
+        }
+    }
+}
+
+impl fmt::Display for Verdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Verdict::StablePhysical => write!(f, "Stable Physical Quartz Signature"),
+            Verdict::LikelyPhysical => write!(f, "Likely Physical Device"),
+            Verdict::Inconclusive => write!(f, "Inconclusive / Needs More Data"),
+        }
+    }
+}
+
+/// Top-level interface: derive slope/ppm stats from observations.
+pub fn calculate_skew(observations: &[Observation]) -> Option<SkewReport> {
+    if observations.len() < 2 {
+        return None;
+    }
+
+    let points: Vec<Point> = observations
+        .iter()
+        .map(|obs| Point::new(obs.remote_ts, obs.local_time))
+        .collect();
+    let hull = compute_lower_hull(points);
+    if hull.len() < 2 {
+        return None;
+    }
+
+    let first = hull.first()?;
+    let last = hull.last()?;
+    let dx = last.x - first.x;
+    if dx.abs() < f64::EPSILON {
+        return None;
+    }
+
+    let mut slope = (last.y - first.y) / dx;
+    if slope.abs() < 0.1 && slope.abs() > f64::EPSILON {
+        slope = 1.0 / slope;
+    }
+
+    let nominal = infer_nominal_frequency(slope);
+    let ppm = slope_to_ppm(slope, nominal);
+    let intercept = first.y - slope * first.x;
+    let mean_y = hull.iter().map(|p| p.y).sum::<f64>() / hull.len() as f64;
+
+    let ss_tot: f64 = hull.iter().map(|p| (p.y - mean_y).powi(2)).sum();
+    let ss_res: f64 = hull
+        .iter()
+        .map(|p| {
+            let expected = slope * p.x + intercept;
+            (p.y - expected).powi(2)
+        })
+        .sum();
+    let r_squared = if ss_tot.abs() < f64::EPSILON {
+        1.0
+    } else {
+        (1.0 - (ss_res / ss_tot)).clamp(0.0, 1.0)
+    };
+
+    Some(SkewReport {
+        slope,
+        ppm,
+        r_squared,
+        verdict: Verdict::classify(ppm, r_squared),
+    })
+}
+
+/// Convert a slope (ratio between sender/receiver rates) into parts-per-million drift.
+pub fn slope_to_ppm(slope: f64, nominal: f64) -> f64 {
+    if nominal.abs() < f64::EPSILON {
+        return 0.0;
+    }
+    ((slope - nominal) / nominal) * 1_000_000.0
+}
+
+fn infer_nominal_frequency(slope: f64) -> f64 {
+    let candidate = slope.abs();
+    if candidate >= 500.0 {
+        1000.0
+    } else if candidate >= 175.0 {
+        250.0
+    } else if candidate >= 75.0 {
+        100.0
+    } else {
+        1.0
+    }
+}
+
 /// Point on the receiver/sender timestamp plane used for convex hull analysis.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Point {
+struct Point {
     pub x: f64,
     pub y: f64,
 }
 
 impl Point {
-    pub fn new(x: f64, y: f64) -> Self {
+    fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
 }
 
 /// Compute the lower convex hull (Monotone Chain) for a set of points.
-pub fn compute_lower_hull(mut points: Vec<Point>) -> Vec<Point> {
+fn compute_lower_hull(mut points: Vec<Point>) -> Vec<Point> {
     if points.len() <= 1 {
         return points;
     }
@@ -38,26 +169,4 @@ pub fn compute_lower_hull(mut points: Vec<Point>) -> Vec<Point> {
 
 fn cross_product(o: Point, a: Point, b: Point) -> f64 {
     (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-}
-
-/// Compute the clock skew slope from the convex hull points.
-pub fn calculate_skew(hull: &[Point]) -> Option<f64> {
-    if hull.len() < 2 {
-        return None;
-    }
-
-    let first = hull.first()?;
-    let last = hull.last()?;
-    let dx = last.x - first.x;
-    if dx.abs() < f64::EPSILON {
-        return None;
-    }
-
-    let slope = (last.y - first.y) / dx;
-    Some(slope)
-}
-
-/// Convert a slope (ratio between sender/receiver rates) into parts-per-million drift.
-pub fn slope_to_ppm(slope: f64) -> f64 {
-    (slope - 1.0) * 1_000_000.0
 }

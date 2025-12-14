@@ -7,9 +7,10 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter};
 use std::process;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use analysis::{Point, calculate_skew, compute_lower_hull, slope_to_ppm};
+use analysis::{Observation, SkewReport, calculate_skew};
 use config::Config;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -31,6 +32,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let cfg = Config::from_args();
     let target_filter = cfg.target_ip;
     let injection_target = resolve_target_v4(target_filter)?;
+    let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(Vec::new()));
 
     log::info!(
         "Chronos-Track starting on interface {} (target={:?})",
@@ -42,7 +44,24 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     ctrlc::set_handler({
         let port = SOURCE_PORT;
+        let shared = Arc::clone(&observations);
         move || {
+            match shared.lock() {
+                Ok(data) => {
+                    if let Some(report) = calculate_skew(&data) {
+                        print_exit_report(report, data.len());
+                    } else {
+                        println!(
+                            "Chronos-Track summary: insufficient observations ({} samples).",
+                            data.len()
+                        );
+                    }
+                }
+                Err(_) => println!(
+                    "Chronos-Track summary: observation buffer poisoned, unable to compute skew."
+                ),
+            }
+
             injector::cleanup_rst(port);
             process::exit(0);
         }
@@ -69,7 +88,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let mut points: Vec<Point> = Vec::new();
+    let shared_observations = Arc::clone(&observations);
     let mut packet_counter: u64 = 0;
 
     loop {
@@ -88,12 +107,22 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let point = Point::new(
-            sample.sender_ts_val as f64,
+        let observation = Observation::new(
             sample.kernel_time_ns as f64 / NS_PER_SEC,
+            sample.sender_ts_val as f64,
         );
-        points.push(point);
+
         packet_counter += 1;
+        let mut snapshot: Option<Vec<Observation>> = None;
+        {
+            let mut guard = shared_observations
+                .lock()
+                .expect("observation buffer poisoned");
+            guard.push(observation);
+            if packet_counter % ANALYSIS_INTERVAL == 0 {
+                snapshot = Some(guard.clone());
+            }
+        }
 
         csv_writer.write_record([
             sample.kernel_time_ns.to_string(),
@@ -102,15 +131,16 @@ fn run() -> Result<(), Box<dyn Error>> {
         ])?;
         csv_writer.flush()?;
 
-        if packet_counter % ANALYSIS_INTERVAL == 0 {
-            let hull = compute_lower_hull(points.clone());
-            if let Some(slope) = calculate_skew(&hull) {
-                let ppm = slope_to_ppm(slope);
+        if let Some(data) = snapshot {
+            if let Some(report) = calculate_skew(&data) {
                 let display_ip = target_filter.unwrap_or(sample.src_ip);
                 log::info!(
-                    "[Packet #{packet_counter}] Target: {display_ip} | Points: {} | Estimated Skew: {:.2} ppm",
-                    points.len(),
-                    ppm
+                    "[Packet #{packet_counter}] Target: {display_ip} | Points: {} | Slope: {:.9} | Skew: {:.2} ppm | R²: {:.3} | Verdict: {}",
+                    data.len(),
+                    report.slope,
+                    report.ppm,
+                    report.r_squared,
+                    report.verdict
                 );
             } else {
                 log::warn!("Insufficient hull points to compute skew at packet #{packet_counter}");
@@ -156,4 +186,14 @@ impl Drop for RstGuard {
             injector::cleanup_rst(self.port);
         }
     }
+}
+
+fn print_exit_report(report: SkewReport, samples: usize) {
+    println!("\n=== Chronos-Track Exit Report ===");
+    println!("Samples captured: {}", samples);
+    println!("Slope: {:.9}", report.slope);
+    println!("Clock Skew: {:.3} ppm", report.ppm);
+    println!("R²: {:.4}", report.r_squared);
+    println!("Classification: {}", report.verdict);
+    println!("=================================\n");
 }
