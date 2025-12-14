@@ -1,3 +1,7 @@
+// Purpose: Provide convex-hull-based clock-skew analysis and classification utilities.
+// Author: Research Project
+// Disclaimer: For educational and defensive research purposes only.
+
 use std::fmt;
 
 /// High-level measurement snapshot used by the skew estimator.
@@ -54,7 +58,11 @@ impl fmt::Display for Verdict {
     }
 }
 
-/// Top-level interface: derive slope/ppm stats from observations.
+/// Executes convex-hull regression on raw observations and returns clock-skew statistics.
+///
+/// The function first evaluates the data assuming TCP timestamps are the X axis. If the
+/// candidate slope suggests the axes were swapped (slope < 1.0), it transparently reruns the
+/// analysis with inverted axes to maintain realistic Hertz-based slopes and high R² fidelity.
 pub fn calculate_skew(observations: &[Observation]) -> Option<SkewReport> {
     if observations.len() < 2 {
         return None;
@@ -79,6 +87,7 @@ pub fn calculate_skew(observations: &[Observation]) -> Option<SkewReport> {
     compute_statistics(&mut reverse_points)
 }
 
+/// Computes slope, ppm, and regression fit metrics from a prepared set of points.
 fn compute_statistics(points: &mut Vec<Point>) -> Option<SkewReport> {
     if points.len() < 2 {
         return None;
@@ -124,7 +133,7 @@ fn compute_statistics(points: &mut Vec<Point>) -> Option<SkewReport> {
     })
 }
 
-/// Convert a slope (ratio between sender/receiver rates) into parts-per-million drift.
+/// Converts a slope (ratio between sender/receiver rates) into parts-per-million drift.
 pub fn slope_to_ppm(slope: f64, nominal: f64) -> f64 {
     if nominal.abs() < f64::EPSILON {
         return 0.0;
@@ -132,6 +141,7 @@ pub fn slope_to_ppm(slope: f64, nominal: f64) -> f64 {
     ((slope - nominal) / nominal) * 1_000_000.0
 }
 
+/// Infers the nominal TCP timestamp frequency so ppm offsets can be reported around the expected baseline.
 fn infer_nominal_frequency(slope: f64) -> f64 {
     let candidate = slope.abs();
     if candidate >= 500.0 {

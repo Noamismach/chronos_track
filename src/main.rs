@@ -1,3 +1,7 @@
+// Purpose: Coordinate injection, packet capture, and convex-hull analysis for Chronos-Track.
+// Author: Research Project
+// Disclaimer: For educational and defensive research purposes only.
+
 mod analysis;
 mod config;
 mod injector;
@@ -151,6 +155,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
 }
 
+/// Resolves the CLI-provided IP filter into an IPv4 address required for active injection.
 fn resolve_target_v4(target: Option<IpAddr>) -> Result<Ipv4Addr, Box<dyn Error>> {
     match target {
         Some(IpAddr::V4(ip)) => Ok(ip),
@@ -165,6 +170,7 @@ fn resolve_target_v4(target: Option<IpAddr>) -> Result<Ipv4Addr, Box<dyn Error>>
     }
 }
 
+/// RAII helper that installs an iptables RST drop rule and ensures it is removed on exit.
 struct RstGuard {
     port: u16,
     installed: bool,
@@ -188,6 +194,7 @@ impl Drop for RstGuard {
     }
 }
 
+/// Emits a final skew summary when Chronos-Track terminates gracefully.
 fn print_exit_report(report: SkewReport, samples: usize) {
     println!("\n=== Chronos-Track Exit Report ===");
     println!("Samples captured: {}", samples);

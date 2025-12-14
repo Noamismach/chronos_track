@@ -1,15 +1,18 @@
+// Purpose: Capture kernel-timestamped TCP packets for Chronos-Track analysis.
+// Author: Research Project
+// Disclaimer: For educational and defensive research purposes only.
+
 #![cfg(target_os = "linux")]
 
 use std::ffi::CString;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, RawFd};
-use std::ptr;
 
 use libc::{self, c_int};
 use log::{debug, error};
 use pnet::packet::Packet;
-use pnet::packet::ethernet::{EtherType, EtherTypes, EthernetPacket};
+use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::ipv4::Ipv4Packet;
 use pnet::packet::ipv6::Ipv6Packet;
@@ -25,6 +28,7 @@ const TIMESTAMP_FLAGS: c_int = (libc::SOF_TIMESTAMPING_SOFTWARE
     | libc::SOF_TIMESTAMPING_RX_SOFTWARE
     | libc::SOF_TIMESTAMPING_RAW_HARDWARE) as c_int;
 
+/// Minimal representation of a captured packet: kernel timestamp, remote TSval, and source IP.
 #[derive(Debug, Clone)]
 pub struct PacketSample {
     pub kernel_time_ns: u64,
@@ -32,7 +36,7 @@ pub struct PacketSample {
     pub src_ip: IpAddr,
 }
 
-/// Create a raw socket bound to a specific interface with precise timestamping enabled.
+/// Creates an AF_PACKET/RAW socket pinned to an interface with SO_TIMESTAMPING enabled.
 pub fn create_precision_socket(interface_name: &str) -> io::Result<Socket> {
     let domain = Domain::from(libc::AF_PACKET);
     let ty = Type::from(libc::SOCK_RAW);
@@ -46,7 +50,7 @@ pub fn create_precision_socket(interface_name: &str) -> io::Result<Socket> {
     Ok(socket)
 }
 
-/// Receive packets until a TCP timestamp option is found, returning the parsed sample.
+/// Receives frames until a TCP timestamp option is parsed, returning the first viable sample.
 pub fn recv_packet(socket: &Socket) -> io::Result<Option<PacketSample>> {
     let mut frame = [0u8; MAX_FRAME_SIZE];
 
