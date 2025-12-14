@@ -1,0 +1,11 @@
+/target
+Cargo.lock
+# Editor and OS cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Project artifacts
+measurements.csv
+*.png

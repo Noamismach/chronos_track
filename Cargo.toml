@@ -1,0 +1,14 @@
+[package]
+name = "chronos_track"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+socket2 = "0.5"
+pnet = "0.34"
+libc = "0.2"
+csv = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
