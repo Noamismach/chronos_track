@@ -4,6 +4,7 @@ use pnet::packet::ipv4::{self, Ipv4Flags, MutableIpv4Packet};
 use pnet::packet::tcp::{self, MutableTcpPacket, TcpFlags, TcpOptionNumbers};
 use pnet::packet::{MutablePacket, Packet};
 use pnet::transport::{self, TransportChannelType};
+use rand::Rng;
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 use std::thread;
@@ -141,8 +142,9 @@ pub fn start_injection_loop(target_ip: Ipv4Addr, target_port: u16, src_port: u16
             Err(e) => error!("Failed to send packet: {}", e),
         }
 
-        // המתנה של 200ms בין פאקטות (כדי לייצר גרף חלק)
-        thread::sleep(Duration::from_millis(200));
+        // המתנה ג'יטר אקראית בין 150ms ל-250ms
+        let jitter_ms = rand::thread_rng().gen_range(150..=250);
+        thread::sleep(Duration::from_millis(jitter_ms));
     }
 }
 

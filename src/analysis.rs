@@ -60,11 +60,31 @@ pub fn calculate_skew(observations: &[Observation]) -> Option<SkewReport> {
         return None;
     }
 
-    let points: Vec<Point> = observations
+    let mut forward_points: Vec<Point> = observations
         .iter()
         .map(|obs| Point::new(obs.remote_ts, obs.local_time))
         .collect();
-    let hull = compute_lower_hull(points);
+    let mut reverse_points: Vec<Point> = observations
+        .iter()
+        .map(|obs| Point::new(obs.local_time, obs.remote_ts))
+        .collect();
+
+    let forward = compute_statistics(&mut forward_points);
+    if let Some(report) = forward {
+        if report.slope >= 1.0 {
+            return Some(report);
+        }
+    }
+
+    compute_statistics(&mut reverse_points)
+}
+
+fn compute_statistics(points: &mut Vec<Point>) -> Option<SkewReport> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let hull = compute_lower_hull(points.clone());
     if hull.len() < 2 {
         return None;
     }
@@ -76,11 +96,7 @@ pub fn calculate_skew(observations: &[Observation]) -> Option<SkewReport> {
         return None;
     }
 
-    let mut slope = (last.y - first.y) / dx;
-    if slope.abs() < 0.1 && slope.abs() > f64::EPSILON {
-        slope = 1.0 / slope;
-    }
-
+    let slope = (last.y - first.y) / dx;
     let nominal = infer_nominal_frequency(slope);
     let ppm = slope_to_ppm(slope, nominal);
     let intercept = first.y - slope * first.x;
