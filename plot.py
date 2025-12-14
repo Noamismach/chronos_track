@@ -58,7 +58,7 @@ try:
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # שם הקובץ: graphs/fingerprint_192.168.1.168_20251214_153000.png
+    # Example output: graphs/fingerprint_203.0.113.42_20251214_153000.png
     output_file = f'{output_dir}/fingerprint_{target_ip}_{current_time}.png'
     
     plt.savefig(output_file)
