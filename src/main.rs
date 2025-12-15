@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use analysis::{Observation, SkewReport, calculate_skew};
+use analysis::{calculate_skew, interpret_report, Observation, SkewReport};
 use config::Config;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -212,11 +212,17 @@ impl Drop for RstGuard {
 
 /// Emits a final skew summary when Chronos-Track terminates gracefully.
 fn print_exit_report(report: SkewReport, samples: usize) {
+    let interpretation = interpret_report(&report);
     println!("\n=== Chronos-Track Exit Report ===");
     println!("Samples captured: {}", samples);
     println!("Slope: {:.9}", report.slope);
     println!("Clock Skew: {:.3} ppm", report.ppm);
     println!("R²: {:.4}", report.r_squared);
     println!("Classification: {}", report.verdict);
-    println!("=================================\n");
+    println!("=================================");
+    println!("--- 🧠 CHRONOS INTELLIGENCE ---");
+    println!("Signal Quality: {}", interpretation.stability_desc);
+    println!("Hardware Est.:  {}", interpretation.hardware_quality);
+    println!("FINAL VERDICT:  {}", interpretation.human_verdict);
+    println!("--------------------------------\n");
 }

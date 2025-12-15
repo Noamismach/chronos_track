@@ -29,6 +29,14 @@ pub struct SkewReport {
     pub verdict: Verdict,
 }
 
+/// Human-friendly explanation of the skew report for non-experts.
+#[derive(Debug, Clone)]
+pub struct Interpretation {
+    pub stability_desc: String,
+    pub hardware_quality: String,
+    pub human_verdict: String,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Verdict {
     StablePhysical,
@@ -131,6 +139,48 @@ fn compute_statistics(points: &mut Vec<Point>) -> Option<SkewReport> {
         r_squared,
         verdict: Verdict::classify(ppm, r_squared),
     })
+}
+
+/// Generate a deterministic interpretation layer for UX-friendly summaries.
+pub fn interpret_report(report: &SkewReport) -> Interpretation {
+    let stability_desc = if report.r_squared > 0.9999 {
+        "Crystal Clear (Perfect Hardware Stability)"
+    } else if report.r_squared > 0.99 {
+        "Stable (Typical Physical Device)"
+    } else if report.r_squared > 0.90 {
+        "Noisy (High Load or Cheap Electronics)"
+    } else {
+        "Chaotic (Likely Virtual/Honeypot or Heavy Interference)"
+    }
+    .to_string();
+
+    let abs_ppm = report.ppm.abs();
+    let hardware_quality = if abs_ppm < 1.0 {
+        "Suspiciously Perfect (Possible Localhost or Hypervisor Sync)"
+    } else if abs_ppm < 100.0 {
+        "High-Grade Hardware (Server/Router)"
+    } else if abs_ppm < 500.0 {
+        "Consumer Hardware (PC/Laptop)"
+    } else {
+        "Low-Fidelity Hardware (IoT/Embedded/TV)"
+    }
+    .to_string();
+
+    let human_verdict = if abs_ppm < 1.0 {
+        "Likely virtualized or localhost clock tightly synced to the observer.".to_string()
+    } else if abs_ppm < 100.0 {
+        "Likely a hardened physical server or carrier-grade router.".to_string()
+    } else if abs_ppm < 500.0 {
+        "Likely a consumer workstation or laptop behind NAT.".to_string()
+    } else {
+        "Likely a physical IoT device or smart appliance with inexpensive crystals.".to_string()
+    };
+
+    Interpretation {
+        stability_desc,
+        hardware_quality,
+        human_verdict,
+    }
 }
 
 /// Converts a slope (ratio between sender/receiver rates) into parts-per-million drift.
