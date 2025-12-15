@@ -11,6 +11,8 @@ use pnet::transport::{self, TransportChannelType};
 use rand::Rng;
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -82,7 +84,12 @@ fn calculate_tcp_checksum(
 // --- Injection Logic ---
 
 /// Builds raw IPv4/TCP SYN probes with timestamps and sends them in a loop.
-pub fn start_injection_loop(target_ip: Ipv4Addr, target_port: u16, src_port: u16) {
+pub fn start_injection_loop(
+    target_ip: Ipv4Addr,
+    target_port: u16,
+    src_port: u16,
+    interval_ms: Arc<AtomicU64>,
+) {
     // Step 1: open a Layer-3 transport channel so the kernel only wraps Ethernet.
     let protocol = TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp);
     let (mut tx, _) = transport::transport_channel(4096, protocol)
@@ -143,9 +150,16 @@ pub fn start_injection_loop(target_ip: Ipv4Addr, target_port: u16, src_port: u16
             Err(e) => error!("Failed to send packet: {}", e),
         }
 
-        // Sleep with random jitter between 150 ms and 250 ms to reduce detection probability.
-        let jitter_ms = rand::thread_rng().gen_range(150..=250);
-        thread::sleep(Duration::from_millis(jitter_ms));
+        // Adaptive sleep with jitter derived from the shared interval.
+        let base_interval = interval_ms.load(Ordering::Relaxed).max(1);
+        let jitter_cap = base_interval / 5;
+        let jitter = if jitter_cap > 0 {
+            rand::thread_rng().gen_range(0..=jitter_cap)
+        } else {
+            0
+        };
+        let sleep_time = base_interval + jitter;
+        thread::sleep(Duration::from_millis(sleep_time));
     }
 }
 

@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter};
 use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -37,6 +38,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let target_filter = cfg.target_ip;
     let injection_target = resolve_target_v4(target_filter)?;
     let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(Vec::new()));
+    let adaptive_interval = Arc::new(AtomicU64::new(200));
 
     log::info!(
         "Chronos-Track starting on interface {} (target={:?})",
@@ -71,8 +73,14 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     })?;
 
+    let injector_interval = Arc::clone(&adaptive_interval);
     thread::spawn(move || {
-        injector::start_injection_loop(injection_target, TARGET_PORT, SOURCE_PORT);
+        injector::start_injection_loop(
+            injection_target,
+            TARGET_PORT,
+            SOURCE_PORT,
+            injector_interval,
+        );
     });
 
     let file = File::create("measurements.csv")?;
@@ -146,6 +154,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                     report.r_squared,
                     report.verdict
                 );
+                let new_interval = if report.r_squared > 0.9999 {
+                    10
+                } else if report.r_squared > 0.99 {
+                    100
+                } else {
+                    500
+                };
+                adaptive_interval.store(new_interval, Ordering::Relaxed);
             } else {
                 log::warn!("Insufficient hull points to compute skew at packet #{packet_counter}");
             }
