@@ -76,7 +76,7 @@ graph TD;
 -----
 
 ## 📊 Proof of Concept
-
+![Graph](graphs/demo.png)
 > **Figure 1:** Analysis of a physical Linux server. The red regression line indicates a stable hardware clock drift, distinct from the noise floor.
 
 -----
