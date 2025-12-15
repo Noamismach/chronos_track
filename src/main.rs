@@ -22,7 +22,6 @@ use std::net::{IpAddr, Ipv4Addr};
 const ANALYSIS_INTERVAL: u64 = 50;
 const NS_PER_SEC: f64 = 1_000_000_000.0;
 const SOURCE_PORT: u16 = 54_321;
-const TARGET_PORT: u16 = 80;
 
 fn main() {
     env_logger::init();
@@ -37,6 +36,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let cfg = Config::from_args();
     let target_filter = cfg.target_ip;
     let injection_target = resolve_target_v4(target_filter)?;
+    let target_port = cfg.target_port;
     let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(Vec::new()));
     let adaptive_interval = Arc::new(AtomicU64::new(200));
 
@@ -77,7 +77,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     thread::spawn(move || {
         injector::start_injection_loop(
             injection_target,
-            TARGET_PORT,
+            target_port,
             SOURCE_PORT,
             injector_interval,
         );

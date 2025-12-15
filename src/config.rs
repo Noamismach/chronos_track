@@ -16,6 +16,10 @@ pub struct Config {
     /// Optional IPv4/IPv6 target filter for packets
     #[arg(long = "target-ip")]
     pub target_ip: Option<IpAddr>,
+
+    /// Destination TCP port for active injection (defaults to 80)
+    #[arg(long = "target-port", default_value_t = 80)]
+    pub target_port: u16,
 }
 
 impl Config {
