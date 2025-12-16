@@ -6,18 +6,22 @@ mod analysis;
 mod config;
 mod injector;
 mod sniffer;
+mod ui;
 
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter};
 use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
-use analysis::{calculate_skew, interpret_report, Observation, SkewReport};
+use analysis::{calculate_skew, interpret_report, Interpretation, Observation, SkewReport};
 use config::Config;
+use socket2::Socket;
 use std::net::{IpAddr, Ipv4Addr};
+use ui::UiState;
 
 const ANALYSIS_INTERVAL: u64 = 50;
 const NS_PER_SEC: f64 = 1_000_000_000.0;
@@ -38,7 +42,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let injection_target = resolve_target_v4(target_filter)?;
     let target_port = cfg.target_port;
     let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_report: Arc<Mutex<Option<SkewReport>>> = Arc::new(Mutex::new(None));
+    let latest_interpretation: Arc<Mutex<Option<Interpretation>>> = Arc::new(Mutex::new(None));
+    let status_text = Arc::new(Mutex::new(String::from("Waiting for packets...")));
     let adaptive_interval = Arc::new(AtomicU64::new(200));
+    let running = Arc::new(AtomicBool::new(true));
+    let start_time = Instant::now();
 
     log::info!(
         "Chronos-Track starting on interface {} (target={:?})",
@@ -49,27 +58,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     let _rst_guard = RstGuard::install(SOURCE_PORT)?;
 
     ctrlc::set_handler({
-        let port = SOURCE_PORT;
-        let shared = Arc::clone(&observations);
+        let running = Arc::clone(&running);
         move || {
-            match shared.lock() {
-                Ok(data) => {
-                    if let Some(report) = calculate_skew(&data) {
-                        print_exit_report(report, data.len());
-                    } else {
-                        println!(
-                            "Chronos-Track summary: insufficient observations ({} samples).",
-                            data.len()
-                        );
-                    }
-                }
-                Err(_) => println!(
-                    "Chronos-Track summary: observation buffer poisoned, unable to compute skew."
-                ),
-            }
-
-            injector::cleanup_rst(port);
-            process::exit(0);
+            running.store(false, Ordering::Relaxed);
         }
     })?;
 
@@ -82,10 +73,6 @@ fn run() -> Result<(), Box<dyn Error>> {
             injector_interval,
         );
     });
-
-    let file = File::create("measurements.csv")?;
-    let mut csv_writer = csv::Writer::from_writer(BufWriter::new(file));
-    csv_writer.write_record(["kernel_time_ns", "sender_ts_val", "src_ip"])?;
 
     let socket = match sniffer::create_precision_socket(&cfg.interface) {
         Ok(sock) => sock,
@@ -100,75 +87,61 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let shared_observations = Arc::clone(&observations);
-    let mut packet_counter: u64 = 0;
+    let file = File::create("measurements.csv")?;
+    let csv_writer = csv::Writer::from_writer(BufWriter::new(file));
 
-    loop {
-        let sample = match sniffer::recv_packet(&socket) {
-            Ok(Some(sample)) => sample,
-            Ok(None) => continue,
-            Err(err) => {
-                log::warn!("recv_packet failed: {err}");
-                continue;
-            }
-        };
+    let capture_handle = spawn_capture_thread(
+        socket,
+        csv_writer,
+        target_filter,
+        Arc::clone(&observations),
+        Arc::clone(&latest_report),
+        Arc::clone(&latest_interpretation),
+        Arc::clone(&status_text),
+        Arc::clone(&adaptive_interval),
+        Arc::clone(&running),
+    );
 
-        if let Some(filter_ip) = target_filter {
-            if sample.src_ip != filter_ip {
-                continue;
-            }
-        }
+    let ui_state = UiState {
+        target_ip: target_filter.map(|ip| ip.to_string()),
+        target_port,
+        start_time,
+        status: Arc::clone(&status_text),
+        observations: Arc::clone(&observations),
+        latest_report: Arc::clone(&latest_report),
+        latest_interpretation: Arc::clone(&latest_interpretation),
+        running: Arc::clone(&running),
+    };
 
-        let observation = Observation::new(
-            sample.kernel_time_ns as f64 / NS_PER_SEC,
-            sample.sender_ts_val as f64,
-        );
+    let ui_result = ui::run(ui_state);
 
-        packet_counter += 1;
-        let mut snapshot: Option<Vec<Observation>> = None;
-        {
-            let mut guard = shared_observations
-                .lock()
-                .expect("observation buffer poisoned");
-            guard.push(observation);
-            if packet_counter % ANALYSIS_INTERVAL == 0 {
-                snapshot = Some(guard.clone());
-            }
-        }
-
-        csv_writer.write_record([
-            sample.kernel_time_ns.to_string(),
-            sample.sender_ts_val.to_string(),
-            sample.src_ip.to_string(),
-        ])?;
-        csv_writer.flush()?;
-
-        if let Some(data) = snapshot {
-            if let Some(report) = calculate_skew(&data) {
-                let display_ip = target_filter.unwrap_or(sample.src_ip);
-                log::info!(
-                    "[Packet #{packet_counter}] Target: {display_ip} | Points: {} | Slope: {:.9} | Skew: {:.2} ppm | R²: {:.3} | Verdict: {}",
-                    data.len(),
-                    report.slope,
-                    report.ppm,
-                    report.r_squared,
-                    report.verdict
-                );
-                let new_interval = if report.r_squared > 0.9999 {
-                    10
-                } else if report.r_squared > 0.99 {
-                    100
-                } else {
-                    500
-                };
-                adaptive_interval.store(new_interval, Ordering::Relaxed);
-            } else {
-                log::warn!("Insufficient hull points to compute skew at packet #{packet_counter}");
-            }
-
-            csv_writer.flush()?;
-        }
+    running.store(false, Ordering::Relaxed);
+    if let Err(err) = capture_handle.join() {
+        log::error!("Capture thread panicked: {:?}", err);
     }
+
+    let samples = {
+        let data = observations
+            .lock()
+            .expect("observation buffer poisoned");
+        if let Some(report) = calculate_skew(&data) {
+            print_exit_report(report, data.len());
+        } else {
+            println!(
+                "Chronos-Track summary: insufficient observations ({} samples).",
+                data.len()
+            );
+        }
+        data.len()
+    };
+
+    if samples == 0 {
+        log::warn!("No samples collected during session.");
+    }
+
+    ui_result.map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+    Ok(())
 }
 
 /// Resolves the CLI-provided IP filter into an IPv4 address required for active injection.
@@ -225,4 +198,141 @@ fn print_exit_report(report: SkewReport, samples: usize) {
     println!("Hardware Est.:  {}", interpretation.hardware_quality);
     println!("FINAL VERDICT:  {}", interpretation.human_verdict);
     println!("--------------------------------\n");
+}
+
+fn spawn_capture_thread(
+    socket: Socket,
+    csv_writer: csv::Writer<BufWriter<File>>,
+    target_filter: Option<IpAddr>,
+    observations: Arc<Mutex<Vec<Observation>>>,
+    latest_report: Arc<Mutex<Option<SkewReport>>>,
+    latest_interpretation: Arc<Mutex<Option<Interpretation>>>,
+    status_text: Arc<Mutex<String>>,
+    adaptive_interval: Arc<AtomicU64>,
+    running: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        if let Err(err) = capture_loop(
+            socket,
+            csv_writer,
+            target_filter,
+            observations,
+            latest_report,
+            latest_interpretation,
+            status_text,
+            adaptive_interval,
+            running,
+        ) {
+            log::error!("Capture loop terminated: {err}");
+        }
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_loop(
+    socket: Socket,
+    mut csv_writer: csv::Writer<BufWriter<File>>,
+    target_filter: Option<IpAddr>,
+    observations: Arc<Mutex<Vec<Observation>>>,
+    latest_report: Arc<Mutex<Option<SkewReport>>>,
+    latest_interpretation: Arc<Mutex<Option<Interpretation>>>,
+    status_text: Arc<Mutex<String>>,
+    adaptive_interval: Arc<AtomicU64>,
+    running: Arc<AtomicBool>,
+) -> Result<(), Box<dyn Error>> {
+    csv_writer.write_record(["kernel_time_ns", "sender_ts_val", "src_ip"])?;
+    csv_writer.flush()?;
+
+    let mut packet_counter: u64 = 0;
+
+    while running.load(Ordering::Relaxed) {
+        let sample = match sniffer::recv_packet(&socket) {
+            Ok(Some(sample)) => sample,
+            Ok(None) => continue,
+            Err(err) => {
+                if err.kind() == io::ErrorKind::WouldBlock {
+                    continue;
+                }
+                log::warn!("recv_packet failed: {err}");
+                continue;
+            }
+        };
+
+        if let Some(filter_ip) = target_filter {
+            if sample.src_ip != filter_ip {
+                continue;
+            }
+        }
+
+        let observation = Observation::new(
+            sample.kernel_time_ns as f64 / NS_PER_SEC,
+            sample.sender_ts_val as f64,
+        );
+
+        packet_counter += 1;
+        let mut snapshot: Option<Vec<Observation>> = None;
+        {
+            let mut guard = observations
+                .lock()
+                .expect("observation buffer poisoned");
+            guard.push(observation);
+            if packet_counter % ANALYSIS_INTERVAL == 0 {
+                snapshot = Some(guard.clone());
+            }
+        }
+
+        csv_writer.write_record([
+            sample.kernel_time_ns.to_string(),
+            sample.sender_ts_val.to_string(),
+            sample.src_ip.to_string(),
+        ])?;
+        csv_writer.flush()?;
+
+        if let Ok(mut status) = status_text.lock() {
+            *status = format!(
+                "Capturing | samples={} | last src={}",
+                packet_counter,
+                sample.src_ip
+            );
+        }
+
+        if let Some(data) = snapshot {
+            if let Some(report) = calculate_skew(&data) {
+                let display_ip = target_filter.unwrap_or(sample.src_ip);
+                log::info!(
+                    "[Packet #{packet_counter}] Target: {display_ip} | Points: {} | Slope: {:.9} | Skew: {:.2} ppm | R²: {:.3} | Verdict: {}",
+                    data.len(),
+                    report.slope,
+                    report.ppm,
+                    report.r_squared,
+                    report.verdict
+                );
+
+                let interpretation = interpret_report(&report);
+                if let Ok(mut guard) = latest_report.lock() {
+                    *guard = Some(report.clone());
+                }
+                if let Ok(mut guard) = latest_interpretation.lock() {
+                    *guard = Some(interpretation);
+                }
+
+                let new_interval = if report.r_squared > 0.9999 {
+                    10
+                } else if report.r_squared > 0.99 {
+                    100
+                } else {
+                    500
+                };
+                adaptive_interval.store(new_interval, Ordering::Relaxed);
+            } else {
+                log::warn!("Insufficient hull points to compute skew at packet #{packet_counter}");
+            }
+        }
+    }
+
+    if let Ok(mut status) = status_text.lock() {
+        *status = String::from("Stopped (awaiting shutdown)");
+    }
+
+    Ok(())
 }

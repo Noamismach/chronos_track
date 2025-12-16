@@ -1,24 +1,18 @@
-/target
+# Build artifacts
+/target/
 Cargo.lock
+**/*.rs.bk
+
 # Editor and OS cruft
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
 
-# Project artifacts
+# Generated data/graphs
 measurements.csv
-*.png
-# Build artifacts
-/target/
-
-# Data files (Personal info)
-measurements.csv
-
-# Generated Graphs
 /graphs/
 *.png
 
-# System files
-.DS_Store
-.vscode/
+# Logs & misc
+*.log

@@ -8,6 +8,7 @@ use std::ffi::CString;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, RawFd};
+use std::time::Duration;
 
 use libc::{self, c_int};
 use log::{debug, error};
@@ -43,6 +44,7 @@ pub fn create_precision_socket(interface_name: &str) -> io::Result<Socket> {
     let protocol = Protocol::from((libc::ETH_P_ALL as i16).to_be() as i32);
     let socket = Socket::new(domain, ty, Some(protocol))?;
     socket.set_nonblocking(false)?;
+    socket.set_read_timeout(Some(Duration::from_millis(200)))?;
 
     bind_to_interface(&socket, interface_name)?;
     enable_timestamping(socket.as_raw_fd())?;

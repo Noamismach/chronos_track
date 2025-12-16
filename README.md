@@ -9,9 +9,7 @@
 
 > **"Hardware never lies."**
 
-**Chronos-Track** is a specialized active reconnaissance tool that pierces the veil of virtualization. By analyzing microscopic deviations in TCP timestamp frequencies (Clock Skew), it determines if a remote target is a physical machine powered by a quartz crystal or a virtualized honeypot.
-
-Unlike traditional fingerprinting (Nmap/p0f) which looks at static software headers, Chronos-Track measures the **physics of the hardware itself**.
+**Chronos-Track** מודדת Clock Skew באמצעות ניתוח סטיות מיקרוסקופיות ב‑TCP Timestamps. המערכת שולחת סייני SYN עם אופציית Timestamp, לוכדת את תגובות היעד בדיוק ננו־שניות, ומבצעת רגרסיה על מעטפת קמורה תחתונה כדי לזהות חתימת קוורץ פיזית מול חותמות זמן וירטואליות מסונכרנות.
 
 ---
 
@@ -19,38 +17,35 @@ Unlike traditional fingerprinting (Nmap/p0f) which looks at static software head
 
 | Feature | Description |
 | :--- | :--- |
-| **Active Hunter Mode** | Autonomous Layer-3 injection engine. No dependency on `curl` or `nmap`. |
-| **👻 Stealth Jitter** | Randomized packet transmission ($200ms \pm 50ms$) to evade IDS/IPS pattern detection. |
-| **🧠 Internal Math Core** | Pure Rust implementation of **Iterative Lower-Bound Regression**. Filters network jitter in real-time. |
-| **🛡️ Kernel Bypass** | `RstGuard` module dynamically manipulates `iptables` to suppress OS interference during half-open handshakes. |
-| **Scientific Forensics** | Outputs precise **PPM (Parts Per Million)** skew and **Linearity ($R^2$)** metrics. |
+| **Active Hunter Mode** | Injector רמת Layer‑3 שבונה מנות SYN עם TSopt וקובע את ה‑source IP בכל מחזור. |
+| **👻 Stealth Jitter** | מרווחי שליחה אדפטיביים (10–500 ms) עם ג'יטר אקראי למניעת דפוסי IDS. |
+| **🧠 Math Core** | Convex Hull Lower-Bound + רגרסיה ליניארית שמנטרלת נקודות רעש ומחזירה ppm, slope ו‑$R^2$. |
+| **🛡️ RstGuard** | הוספה/הסרה אוטומטית של חוקת `iptables` לדיכוי RST מקומיים (source port 54321). |
+| **📺 Live TUI** | ממשק Ratatui מציג סטטוס סשן, גרף פיזור + קו רגרסיה, ולוח מודיעין (“🧠 CHRONOS INTELLIGENCE”). |
+| **📦 Data Export** | כתיבה רציפה ל‑`measurements.csv` + סקריפט Python (`plot.py`) ליצירת גרפי Convex Hull.
 
 ### Why This Matters
 
-- **Hardware truthing:** Identifies physical endpoints hiding behind VPNs, Tor exits, or cloud NAT by measuring their crystal oscillator signature.
-- **Honeypot detection:** Differentiates real bare-metal from instrumented traps that recycle virtual timestamps.
-- **Attribution aid:** Pairs low-level timing data with higher-layer intel to improve clustering of adversary infrastructure.
+- **Hardware truthing:** Clock skew פיזי נשמר גם מאחורי VPN/NAT ולכן מסייע להבדיל בין שרת אמיתי לבין Honeypot וירטואלי.
+- **Noise rejection:** שימוש ב‑SO_TIMESTAMPING + Hull מוריד jitter מהרשת ומאפשר לטפל בקישורים עמוסים.
+- **שילוב מודיעיני:** Live verdictים מאפשרים קבלת החלטה במקום ולהמשיך לניתוח Offline עם החומר הגולמי.
 
 ---
 
 ## 🔬 Theory of Operation
 
-Every physical computer relies on a quartz crystal oscillator to keep time. These crystals are imperfect; their actual frequency ($f_{actual}$) deviates slightly from the nominal frequency ($f_{nominal}$) due to manufacturing tolerances and temperature.
-
-**The Clock Skew ($\alpha$)** is defined as:
+כל אוסצילטור קוורץ סוטה בתדרו מ‑$f_{nominal}$. Chronos-Track מודד את השיפוע בין $T_{ts}$ (שעון היעד) לבין $t_{rx}$ (שעון מקומי):
 
 $$\alpha = \frac{f_{actual} - f_{nominal}}{f_{nominal}}$$
 
-Chronos-Track exploits the **TCP Timestamp Option (RFC 7323)**. By sending periodic probes and recording the target's response timestamps ($T_{ts}$) against our local monotonic clock ($t_{rx}$), we can plot the drift.
-
-* **Physical Hardware:** Shows a stable, linear drift ($R^2 > 0.999$).
-* **Virtual Machines:** Show erratic behavior, "steps" in time, or perfect synchronization (0 PPM) due to hypervisor scheduling.
+- **Physical Hardware:** מציג Drift ליניארי ו‑$R^2$ גבוה (≥ 0.99).
+- **Virtual / Honeypot:** מציג שיפועים אפסיים, קפיצות, או רעש כאוטי בעקבות סנכרון ל‑Host.
 
 ### Data Products
 
-- `measurements.csv` – Raw tuples `(kernel_rx_time_ns, tcp_tsval, src_ip)` for offline research.
-- `graphs/*.png` – Optional Python/Matplotlib renders of convex-hull regression for reports.
-- **Exit Report** – On `Ctrl+C` the tool prints slope, ppm, R², and verdict for immediate triage.
+- `measurements.csv` – רשומה אחת לכל חבילה: `kernel_time_ns,sender_ts_val,src_ip`.
+- `graphs/fingerprint_*.png` – נוצר ע"י `python plot.py`, כולל ענן נקודות + Convex Hull.
+- דוח יציאה – בעת `Ctrl+C` מתקבלות סטטיסטיקות (Samples, slope, ppm, $R^2$, verdict + תיאור מילולי).
 
 ---
 
@@ -58,101 +53,123 @@ Chronos-Track exploits the **TCP Timestamp Option (RFC 7323)**. By sending perio
 
 ```mermaid
 graph TD;
-    A[Injector Tx] -->|Raw SYN + Jitter| B(Target Host);
+    A[Injector Tx] -->|Raw SYN + TSopt| B(Target Host);
     B -->|SYN-ACK + TSval| C[Sniffer Rx];
-    C -->|Kernel Timestamp| D{Analysis Core};
-    D -->|Data Tuple| E[Iterative Regression];
-    E -->|Filter Noise| F[Verdict: Physical/Virtual];
+    C -->|SO_TIMESTAMPING| D{Analysis Core};
+    D -->|Observations| E[Convex Hull Regression];
+    E -->|ppm, R², Verdict| F[TUI + CSV];
 ````
 
-### The Pipeline
+### Pipeline Overview
 
-1.  **Injector:** Bypasses standard networking stack to inject crafted packets.
-2.  **RstGuard:** Prevents the local kernel from sending `RST` packets that would kill the connection.
-3.  **Sniffer:** Uses `AF_PACKET` with `SO_TIMESTAMPING` to grab packet arrival times at the kernel driver level (nanosecond precision), eliminating userspace lag.
-4.  **Math Engine:** Calculates the convex hull lower-bound to ignore network lag spikes.
-5.  **Reporter:** Streams CSV + emits real-time logs every 50 samples and a final exit verdict.
+1. **Injector** – PNET Layer‑3 ערוץ, בונה IPv4/TCP + אופציית Timestamp (TSval קבועה) ומוסיף jitter.
+2. **RstGuard** – מציב חוקת iptables `OUTPUT` לדיכוי `RST` מקומי ומנקה אותה ב‑Drop.
+3. **Sniffer** – `AF_PACKET/SO_TIMESTAMPING` עם `recvmsg` ו‑CMSG parsing שמחלץ חותמות זמן ננו־שניות.
+4. **Analysis** – מייצר `Observation`‎‑ים, מחשב מעטפת קמורה תחתונה, מסיק slope→ppm→Verdict ופרשנות.
+5. **UI & Logging** – Ratatui + `env_logger`; כל 50 Samples נשלח log INFO ועידכון תצוגה.
 
------
+---
 
 ## 📊 Proof of Concept
 ![Graph](graphs/demo.png)
-> **Figure 1:** Analysis of a physical Linux server. The red regression line indicates a stable hardware clock drift, distinct from the noise floor.
+> **Figure 1:** Convex Hull (אדום) מעל ענן הדגימות ממחיש את ה‑drift הליניארי של יעד פיזי.
 
------
+---
 
 ## 🚀 Usage
 
 ### Prerequisites
 
-  - Linux kernel with `AF_PACKET` + `SO_TIMESTAMPING` (native or WSL2).
-  - `iptables`, `ethtool` (recommended).
-  - CAP\_NET\_RAW or root privileges.
+- לינוקס (כולל WSL2) עם `AF_PACKET` ו‑`SO_TIMESTAMPING`.
+- הרשאות `CAP_NET_RAW` + גישה ל‑`iptables`.
+- מומלץ: `ethtool -K <iface> tx off rx off` כדי לנטרל offload בזמן בדיקה.
 
-### 1\. Build
+### Build
 
 ```bash
 cargo build --release
 ```
 
-### 2\. Prepare Environment (Linux/WSL)
+### CLI Flags
 
-Disable checksum offloading to ensure raw packets are processed correctly by virtual NICs.
+| Flag | Required | Description |
+| :--- | :--- | :--- |
+| `--interface <IFACE>` | ✅ | הממשק ללכידה והאזנה (משמש את Socket ה‑AF_PACKET). |
+| `--target-ip <IPv4>` | ✅ | יעד להזרקה. IPv6 נתמך ללכידה פסיבית בלבד והקריאה תידחה אם יינתן IPv6. |
+| `--target-port <u16>` | ❌ | פורט היעד ל‑SYN (ברירת מחדל 80). |
+
+> נדרש להפעיל כ־root או להעניק יכולות (`setcap cap_net_raw+ep target/release/chronos_track`).
+
+### Run
 
 ```bash
-sudo ethtool -K eth0 tx off rx off
-```
-
-### 3\. Run Active Scan
-
-```bash
-# Run with info logs to see the verdict
 RUST_LOG=info sudo -E ./target/release/chronos_track \
     --interface eth0 \
-    --target-ip <TARGET_IP>
+    --target-ip 203.0.113.42 \
+    --target-port 443
 ```
 
-### 4\. Interpret Results
+### Runtime Controls
 
-Wait for \~60 seconds and press `Ctrl+C`.
+- `Ctrl+C` – עוצר את ה־injector/sniffer, סוגר את ממשק ה‑TUI ומדפיס Exit Report.
+- `q` / `Q` – סוגר את ה‑TUI בלבד (גם כן מפסיק את הסשן).
+- פלט INFO כל 50 דגימות מציג נקודות, slope, ppm, $R^2$, verdict ומרווח ההזרקה החדש.
+
+### Outputs
 
 ```text
 === Chronos-Track Exit Report ===
-Slope: 993.73 Hz        <-- Detected Frequency
-Clock Skew: -62.3 ppm   <-- Hardware Deviation
-R²: 0.9996              <-- Linearity (Stability)
-Verdict: Physical       <-- Conclusion
-=================================
+Samples captured: 312
+Slope: 0.999873219
+Clock Skew: -126.8 ppm
+R²: 0.9987
+Classification: Stable Physical Quartz Signature
+--- 🧠 CHRONOS INTELLIGENCE ---
+Signal Quality: Stable (Typical Physical Device)
+Hardware Est.:  Consumer Hardware (PC/Laptop)
+FINAL VERDICT:  Likely a consumer workstation or laptop behind NAT.
+--------------------------------
 ```
 
------
+להפקת גרף Offline:
+
+```bash
+python plot.py  # יוצר graphs/fingerprint_<ip>_<timestamp>.png
+```
+
+---
+
+## 🔧 Limitations & Notes
+
+- ה‑Injector תומך כרגע ב‑IPv4 בלבד; ניתן להריץ Passive Sniffing אם מציינים יעד IPv4 אך לא מתקבלות תשובות.
+- `measurements.csv` נכתב מחדש בכל ריצה – יש לגבות לפני סשן נוסף.
+- ה‑Injector רץ בלולאה אינסופית עד שהדגל `running` מכובה; אין CLI לעצירתו בנפרד.
+- דרוש `iptables` בסביבה (למשל ב‑WSL יש להפעיל אותו במכונה הנכונה).
+
+---
 
 ## 🗺️ Roadmap to v2.0 (Mass Scanner)
 
-Research is complete for the next phase: **Mass Subnet Scanning**.
-We are moving from a synchronous architecture to a fully **Asynchronous (Tokio) Monolith** capable of scanning `/16` networks.
+- [x] v1.2 – Active single target + Ratatui + Convex Hull Math Core.
+- [ ] v2.0 – ארכיטקטורת Tokio אסינכרונית, מעקב אחר עשרות יעדים במקביל, DashMap state + יצוא JSON.
 
-  * [x] **v1.2:** Single Target, Stealth Mode, Rust Math.
-  * [ ] **v2.0:** Async Tokio Engine, DashMap State Management, Masscan-like throughput.
+📄 **Architecture v2 draft** – בעבודה (מסמך פנימי).
 
-📄 **[Read the Architecture Design Document](https://www.google.com/search?q=./architecture_v2.pdf)**
-
------
+---
 
 ## 🤝 Contributing
 
-Pull requests are welcome for:
+נשמח ל‑PRs עבור:
 
-  - Additional timestamp parsers (QUIC, ICMP).
-  - Dashboards / notebooks for post-processing.
-  - Hardening for containers (AppArmor/SELinux profiles).
+- תמיכה באוספים נוספים (QUIC/ICMP timestamps).
+- Dashboards / Jupyter notebooks לחקר הנתונים.
+- חיזוק הקשחת סביבה (AppArmor/SELinux, קונטיינרים, WFP ב‑Windows).
 
-Please open an issue before large-scale refactors so we can coordinate.
+נא לפתוח issue לפני רפקטור משמעותי.
 
 ## ⚠️ Disclaimer
 
-This tool is designed for **defensive security research** and educational purposes only (e.g., identifying honeypots on your own network).
-Scanning third-party infrastructure without permission is illegal and unethical. The authors claim no responsibility for unauthorized use.
+השימוש בכלי מיועד למחקר הגנתי, בדיקות Red/Blue בתוך גבולות חוקיים, ולתשתיות שבבעלותכם בלבד. הפעלת סריקות כלפי צד שלישי ללא אישור – אסורה ועל אחריות המשתמש בלבד.
 
 ```
 ```

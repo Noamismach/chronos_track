@@ -27,6 +27,8 @@ pub struct SkewReport {
     pub ppm: f64,
     pub r_squared: f64,
     pub verdict: Verdict,
+    pub intercept: f64,
+    pub nominal_frequency: f64,
 }
 
 /// Human-friendly explanation of the skew report for non-experts.
@@ -138,6 +140,8 @@ fn compute_statistics(points: &mut Vec<Point>) -> Option<SkewReport> {
         ppm,
         r_squared,
         verdict: Verdict::classify(ppm, r_squared),
+        intercept,
+        nominal_frequency: nominal,
     })
 }
 
