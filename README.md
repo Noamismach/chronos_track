@@ -9,7 +9,7 @@
 
 > **"Hardware never lies."**
 
-**Chronos-Track** מודדת Clock Skew באמצעות ניתוח סטיות מיקרוסקופיות ב‑TCP Timestamps. המערכת שולחת סייני SYN עם אופציית Timestamp, לוכדת את תגובות היעד בדיוק ננו־שניות, ומבצעת רגרסיה על מעטפת קמורה תחתונה כדי לזהות חתימת קוורץ פיזית מול חותמות זמן וירטואליות מסונכרנות.
+**Chronos-Track** measures clock skew by examining microscopic drift in TCP timestamps. The engine injects SYN probes with mandatory TSopt fields, captures the replies with nanosecond kernel timestamps, and runs lower-convex-hull regression to separate physical quartz signatures from virtualized honeypots.
 
 ---
 
@@ -17,35 +17,35 @@
 
 | Feature | Description |
 | :--- | :--- |
-| **Active Hunter Mode** | Injector רמת Layer‑3 שבונה מנות SYN עם TSopt וקובע את ה‑source IP בכל מחזור. |
-| **👻 Stealth Jitter** | מרווחי שליחה אדפטיביים (10–500 ms) עם ג'יטר אקראי למניעת דפוסי IDS. |
-| **🧠 Math Core** | Convex Hull Lower-Bound + רגרסיה ליניארית שמנטרלת נקודות רעש ומחזירה ppm, slope ו‑$R^2$. |
-| **🛡️ RstGuard** | הוספה/הסרה אוטומטית של חוקת `iptables` לדיכוי RST מקומיים (source port 54321). |
-| **📺 Live TUI** | ממשק Ratatui מציג סטטוס סשן, גרף פיזור + קו רגרסיה, ולוח מודיעין (“🧠 CHRONOS INTELLIGENCE”). |
-| **📦 Data Export** | כתיבה רציפה ל‑`measurements.csv` + סקריפט Python (`plot.py`) ליצירת גרפי Convex Hull.
+| **Active Hunter Mode** | Layer-3 injector crafts IPv4 SYN packets with TSopt and refreshes the spoofed source IP every loop. |
+| **👻 Stealth Jitter** | Adaptive transmit cadence (10–500 ms) with random jitter to break IDS/IPS timing patterns. |
+| **🧠 Math Core** | Convex-hull lower bound plus linear regression that rejects noisy points and emits ppm, slope, and $R^2$. |
+| **🛡️ RstGuard** | Automatically inserts/removes `iptables` OUTPUT rules to drop local RST packets (source port 54321). |
+| **📺 Live TUI** | Ratatui dashboard with session stats, scatter plot + regression line, and the “🧠 CHRONOS INTELLIGENCE” panel. |
+| **📦 Data Export** | Continuous CSV logging (`measurements.csv`) and a Python helper (`plot.py`) for convex-hull charts.
 
 ### Why This Matters
 
-- **Hardware truthing:** Clock skew פיזי נשמר גם מאחורי VPN/NAT ולכן מסייע להבדיל בין שרת אמיתי לבין Honeypot וירטואלי.
-- **Noise rejection:** שימוש ב‑SO_TIMESTAMPING + Hull מוריד jitter מהרשת ומאפשר לטפל בקישורים עמוסים.
-- **שילוב מודיעיני:** Live verdictים מאפשרים קבלת החלטה במקום ולהמשיך לניתוח Offline עם החומר הגולמי.
+- **Hardware truthing:** Physical clock skew survives VPNs/NAT, allowing real bare metal to be separated from staged decoys.
+- **Noise rejection:** SO_TIMESTAMPING + hull filtering reduce path jitter, so congested links are still analyzable.
+- **Instant intel:** Live verdict stream provides immediate go/no-go signals, while raw data stays available for offline work.
 
 ---
 
 ## 🔬 Theory of Operation
 
-כל אוסצילטור קוורץ סוטה בתדרו מ‑$f_{nominal}$. Chronos-Track מודד את השיפוע בין $T_{ts}$ (שעון היעד) לבין $t_{rx}$ (שעון מקומי):
+Every quartz oscillator deviates from $f_{nominal}$. Chronos-Track measures the slope between the target clock $T_{ts}$ and the local clock $t_{rx}$:
 
 $$\alpha = \frac{f_{actual} - f_{nominal}}{f_{nominal}}$$
 
-- **Physical Hardware:** מציג Drift ליניארי ו‑$R^2$ גבוה (≥ 0.99).
-- **Virtual / Honeypot:** מציג שיפועים אפסיים, קפיצות, או רעש כאוטי בעקבות סנכרון ל‑Host.
+- **Physical Hardware:** Displays linear drift with high $R^2$ (≥ 0.99).
+- **Virtual / Honeypot:** Shows zero slopes, steps, or chaotic noise caused by hypervisor synchronization.
 
 ### Data Products
 
-- `measurements.csv` – רשומה אחת לכל חבילה: `kernel_time_ns,sender_ts_val,src_ip`.
-- `graphs/fingerprint_*.png` – נוצר ע"י `python plot.py`, כולל ענן נקודות + Convex Hull.
-- דוח יציאה – בעת `Ctrl+C` מתקבלות סטטיסטיקות (Samples, slope, ppm, $R^2$, verdict + תיאור מילולי).
+- `measurements.csv` – One row per packet: `kernel_time_ns,sender_ts_val,src_ip`.
+- `graphs/fingerprint_*.png` – Produced via `python plot.py`, combining scatter points and the hull outline.
+- Exit report – Triggered on `Ctrl+C`, prints samples collected, slope, ppm, $R^2$, verdict, and narrative summary.
 
 ---
 
@@ -62,17 +62,17 @@ graph TD;
 
 ### Pipeline Overview
 
-1. **Injector** – PNET Layer‑3 ערוץ, בונה IPv4/TCP + אופציית Timestamp (TSval קבועה) ומוסיף jitter.
-2. **RstGuard** – מציב חוקת iptables `OUTPUT` לדיכוי `RST` מקומי ומנקה אותה ב‑Drop.
-3. **Sniffer** – `AF_PACKET/SO_TIMESTAMPING` עם `recvmsg` ו‑CMSG parsing שמחלץ חותמות זמן ננו־שניות.
-4. **Analysis** – מייצר `Observation`‎‑ים, מחשב מעטפת קמורה תחתונה, מסיק slope→ppm→Verdict ופרשנות.
-5. **UI & Logging** – Ratatui + `env_logger`; כל 50 Samples נשלח log INFO ועידכון תצוגה.
+1. **Injector** – PNET layer-3 channel builds IPv4/TCP + timestamp option (fixed TSval) and adds jitter.
+2. **RstGuard** – Installs an `iptables OUTPUT` rule to suppress local `RST` packets and removes it via Drop.
+3. **Sniffer** – `AF_PACKET/SO_TIMESTAMPING` socket with `recvmsg` and CMSG parsing for nanosecond precision.
+4. **Analysis** – Creates `Observation` structs, computes the lower hull, infers slope→ppm→verdict and interpretation.
+5. **UI & Logging** – Ratatui + `env_logger`; every 50 samples a new report is logged and painted on screen.
 
 ---
 
 ## 📊 Proof of Concept
 ![Graph](graphs/demo.png)
-> **Figure 1:** Convex Hull (אדום) מעל ענן הדגימות ממחיש את ה‑drift הליניארי של יעד פיזי.
+> **Figure 1:** The red convex hull traces the linear drift of a physical target above the raw jitter cloud.
 
 ---
 
@@ -80,9 +80,9 @@ graph TD;
 
 ### Prerequisites
 
-- לינוקס (כולל WSL2) עם `AF_PACKET` ו‑`SO_TIMESTAMPING`.
-- הרשאות `CAP_NET_RAW` + גישה ל‑`iptables`.
-- מומלץ: `ethtool -K <iface> tx off rx off` כדי לנטרל offload בזמן בדיקה.
+- Linux (native or WSL2) with `AF_PACKET` and `SO_TIMESTAMPING`.
+- `CAP_NET_RAW` privileges and access to `iptables`.
+- Optional but useful: `ethtool -K <iface> tx off rx off` to disable checksum offload during tests.
 
 ### Build
 
@@ -94,11 +94,11 @@ cargo build --release
 
 | Flag | Required | Description |
 | :--- | :--- | :--- |
-| `--interface <IFACE>` | ✅ | הממשק ללכידה והאזנה (משמש את Socket ה‑AF_PACKET). |
-| `--target-ip <IPv4>` | ✅ | יעד להזרקה. IPv6 נתמך ללכידה פסיבית בלבד והקריאה תידחה אם יינתן IPv6. |
-| `--target-port <u16>` | ❌ | פורט היעד ל‑SYN (ברירת מחדל 80). |
+| `--interface <IFACE>` | ✅ | Interface bound to the AF_PACKET socket (capture + injection). |
+| `--target-ip <IPv4>` | ✅ | Active target. IPv6 is currently rejected for injection (sniffer can still see it). |
+| `--target-port <u16>` | ❌ | Destination TCP port for SYN packets (default 80). |
 
-> נדרש להפעיל כ־root או להעניק יכולות (`setcap cap_net_raw+ep target/release/chronos_track`).
+> Run as root or grant capabilities: `setcap cap_net_raw+ep target/release/chronos_track`.
 
 ### Run
 
@@ -111,9 +111,9 @@ RUST_LOG=info sudo -E ./target/release/chronos_track \
 
 ### Runtime Controls
 
-- `Ctrl+C` – עוצר את ה־injector/sniffer, סוגר את ממשק ה‑TUI ומדפיס Exit Report.
-- `q` / `Q` – סוגר את ה‑TUI בלבד (גם כן מפסיק את הסשן).
-- פלט INFO כל 50 דגימות מציג נקודות, slope, ppm, $R^2$, verdict ומרווח ההזרקה החדש.
+- `Ctrl+C` – Stops injector/sniffer, closes the TUI, and prints the exit report.
+- `q` / `Q` – Gracefully quits the TUI (also flips the shared `running` flag).
+- INFO logs every 50 samples include point count, slope, ppm, $R^2$, verdict, and the new injection interval.
 
 ### Outputs
 
@@ -131,45 +131,45 @@ FINAL VERDICT:  Likely a consumer workstation or laptop behind NAT.
 --------------------------------
 ```
 
-להפקת גרף Offline:
+To render an offline chart:
 
 ```bash
-python plot.py  # יוצר graphs/fingerprint_<ip>_<timestamp>.png
+python plot.py  # creates graphs/fingerprint_<ip>_<timestamp>.png
 ```
 
 ---
 
 ## 🔧 Limitations & Notes
 
-- ה‑Injector תומך כרגע ב‑IPv4 בלבד; ניתן להריץ Passive Sniffing אם מציינים יעד IPv4 אך לא מתקבלות תשובות.
-- `measurements.csv` נכתב מחדש בכל ריצה – יש לגבות לפני סשן נוסף.
-- ה‑Injector רץ בלולאה אינסופית עד שהדגל `running` מכובה; אין CLI לעצירתו בנפרד.
-- דרוש `iptables` בסביבה (למשל ב‑WSL יש להפעיל אותו במכונה הנכונה).
+- Injector currently supports IPv4 only; passive sniffing can still observe IPv6 if packets arrive.
+- `measurements.csv` is overwritten on each run—archive it before starting another session.
+- Injector loop runs until the shared `running` flag is cleared; there is no separate CLI toggle yet.
+- Requires `iptables` to be available (WSL users must run inside the distro that owns the interface).
 
 ---
 
 ## 🗺️ Roadmap to v2.0 (Mass Scanner)
 
 - [x] v1.2 – Active single target + Ratatui + Convex Hull Math Core.
-- [ ] v2.0 – ארכיטקטורת Tokio אסינכרונית, מעקב אחר עשרות יעדים במקביל, DashMap state + יצוא JSON.
+- [ ] v2.0 – Tokio-based async engine, concurrent target tracking, DashMap state, JSON streaming output.
 
-📄 **Architecture v2 draft** – בעבודה (מסמך פנימי).
+📄 **Architecture v2 draft** – work in progress (internal doc).
 
 ---
 
 ## 🤝 Contributing
 
-נשמח ל‑PRs עבור:
+Pull requests welcome for:
 
-- תמיכה באוספים נוספים (QUIC/ICMP timestamps).
-- Dashboards / Jupyter notebooks לחקר הנתונים.
-- חיזוק הקשחת סביבה (AppArmor/SELinux, קונטיינרים, WFP ב‑Windows).
+- Additional timestamp families (QUIC, ICMP).
+- Dashboards / notebooks for deeper analytics.
+- Hardening profiles (AppArmor/SELinux, container policies, Windows WFP rules).
 
-נא לפתוח issue לפני רפקטור משמעותי.
+Open an issue before large refactors so we can coordinate roadmaps.
 
 ## ⚠️ Disclaimer
 
-השימוש בכלי מיועד למחקר הגנתי, בדיקות Red/Blue בתוך גבולות חוקיים, ולתשתיות שבבעלותכם בלבד. הפעלת סריקות כלפי צד שלישי ללא אישור – אסורה ועל אחריות המשתמש בלבד.
+Use this tool only for defensive research, Red/Blue exercises, and infrastructure you own or have explicit authorization to test. Unauthorized scanning is illegal and the authors assume no liability.
 
 ```
 ```
